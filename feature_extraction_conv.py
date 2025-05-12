@@ -138,6 +138,7 @@ def run_feature_extraction():
     print(f"Patch features saved to: {features_h5_path}")
 
     # 7. Inspect features HDF5 file
+    print(features_h5_path)
     print("\nInspecting patch features HDF5 file:")
     with h5py.File(features_h5_path, 'r') as h5_file:
         h5_file.visititems(print_attrs)
