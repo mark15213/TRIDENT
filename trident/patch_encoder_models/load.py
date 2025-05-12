@@ -1253,3 +1253,62 @@ class Midnight12kInferenceEncoder(BasePatchEncoder):
             raise ValueError(
                 f"expected return_type to be one of 'cls_token' or 'cls+mean', but got '{self.return_type}'"
             )
+
+class MyConvNeXtV2LargeSSLEncoder(BasePatchEncoder):
+    def __init__(self, weights_path: Optional[str] = None, input_size: int = 224, precision: torch.dtype = torch.float16, **build_kwargs):
+        """
+        My Custom ConvNeXt V2 Large SSL Encoder.
+        Args:
+            weights_path (Optional[str]): Path to your SSL pretrained weights. REQUIRED.
+            input_size (int): Input image size.
+            precision (torch.dtype): Desired precision.
+        """
+        self.custom_input_size = input_size
+        self.custom_precision = precision
+        # build_kwargs can be passed to _build
+        super().__init__(weights_path=weights_path, **build_kwargs) # weights_path must be provided
+
+    def _build(self, **build_kwargs): # build_kwargs are passed from __init__
+        import timm # Ensure timm is imported
+
+        self.enc_name = 'my_convnextv2_large_ssl' # Or a name of your choice
+
+        if not self.weights_path:
+            raise ValueError(f"{self.enc_name} requires a 'weights_path' to your custom SSL pretrained weights.")
+
+        self.ensure_valid_weights_path(self.weights_path) # Use the base class method
+
+        model_architecture_name = 'convnextv2_large'
+
+        # Create the model
+        model = timm.create_model(
+            model_architecture_name,
+            pretrained=False,
+            num_classes=0 # For feature extraction
+        )
+
+        # Load weights
+        state_dict = torch.load(self.weights_path, map_location='cpu')
+        if 'state_dict' in state_dict: state_dict = state_dict['state_dict']
+        elif 'model_state_dict' in state_dict: state_dict = state_dict['model_state_dict']
+        elif 'model' in state_dict: state_dict = state_dict['model']
+
+        first_key = next(iter(state_dict))
+        if first_key.startswith('module.'):
+            state_dict = {k[len('module.'):]: v for k, v in state_dict.items()}
+
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        if missing_keys: print(f"Warning: Missing keys for {self.enc_name}: {missing_keys}")
+        if unexpected_keys: print(f"Warning: Unexpected keys for {self.enc_name}: {unexpected_keys}")
+
+        model.head = torch.nn.Identity() # Ensure it's a feature extractor
+
+        # Set up transformations
+        data_config = timm.data.resolve_model_data_config(model)
+        data_config['input_size'] = (3, self.custom_input_size, self.custom_input_size)
+        eval_transforms = timm.data.create_transform(**data_config, is_training=False)
+
+        # precision is already set in __init__ via self.custom_precision
+        precision_to_use = self.custom_precision
+
+        return model, eval_transforms, precision_to_use
