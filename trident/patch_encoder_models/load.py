@@ -101,7 +101,7 @@ def encoder_factory(model_name: str, **kwargs):
         enc = LunitS8InferenceEncoder
     elif model_name == 'midnight12k':
         enc = Midnight12kInferenceEncoder
-    elif model=name == 'convnextv2l':
+    elif model_name == 'convnextv2l':
         enc = MyConvNeXtV2LargeSSLEncoder
     else:
         raise ValueError(f"Unknown encoder name {model_name}")

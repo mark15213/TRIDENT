@@ -5,7 +5,7 @@ from huggingface_hub import snapshot_download
 import h5py
 import timm
 
-from load import encoder_factory # Your modified factory
+from trident.patch_encoder_models import encoder_factory
 
 # Assuming trident imports are standard
 from trident import OpenSlideWSI
@@ -16,18 +16,19 @@ OUTPUT_DIR = "tutorial_convnext_extraction_output/"
 DEVICE_STR = f"cuda:0" if torch.cuda.is_available() else "cpu"
 DEVICE = torch.device(DEVICE_STR) # torch.device object for operations outside trident if any
 WSI_FNAME = '394140.svs' # Example WSI filename
+WSI_FULL_PATH = "/mnt/warm/SenseCare-PathCloud/single/storage/rj/section_files/20240419/0880014d8f3afd247f3af16fea1c11d1/2024-014590#2#1.sdpc"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- Custom ConvNeXt V2 Configuration ---
 CONVNEXT_MODEL_NAME_IN_FACTORY = 'convnextv2l'
 # !!! IMPORTANT: SET THE PATH TO YOUR PRETRAINED WEIGHTS !!!
-CONVNEXT_WEIGHTS_PATH = 'path/to/your/custom_convnextv2_large_weights.pth' # <--- MODIFY THIS
+CONVNEXT_WEIGHTS_PATH = '/mnt/rj200t/ckpt/checkpoint-2.pth' # <--- MODIFY THIS
 CONVNEXT_INPUT_SIZE = 224
 CONVNEXT_PRECISION = torch.float16 if DEVICE_STR.startswith("cuda") else torch.float32
 
 TARGET_MAG_SEGMENTATION = 10
 TARGET_MAG_PATCHING = 20
-PATCH_SIZE = 256
+PATCH_SIZE = 224
 
 # --- Helper function for HDF5 inspection ---
 def print_attrs(name, obj):
@@ -43,7 +44,7 @@ def run_feature_extraction():
     # Pre-flight check for weights
     if not os.path.exists(CONVNEXT_WEIGHTS_PATH):
         print(f"ERROR: ConvNeXt V2 weights not found at '{CONVNEXT_WEIGHTS_PATH}'.")
-        if CONVNEXT_WEIGHTS_PATH == 'path/to/your/custom_convnextv2_large_weights.pth': # Placeholder
+        if CONVNEXT_WEIGHTS_PATH == '/mnt/rj200t/ckpt/checkpoint-2.pth':
             print("Attempting to create dummy weights for demonstration as placeholder path is used...")
             try:
                 dummy_model_temp = timm.create_model('convnextv2_large', pretrained=False, num_classes=0)
@@ -64,12 +65,12 @@ def run_feature_extraction():
         local_dir=os.path.join(OUTPUT_DIR, 'wsis'),
         allow_patterns=[WSI_FNAME]
     )
-    wsi_path = os.path.join(local_wsi_dir, WSI_FNAME)
-    print(f"WSI saved to: {wsi_path}")
+    wsi_path = os.path.join(local_dir, WSI_FNAME)
 
     # 2. Create OpenSlideWSI object
     print("Creating OpenSlideWSI object...")
-    slide = OpenSlideWSI(slide_path=wsi_path, lazy_init=False, device=DEVICE_STR)
+    # print(wsi_path)
+    slide = OpenSlideWSI(slide_path=wsi_path, lazy_init=False)
 
     # 3. Run tissue segmentation
     print("Running tissue segmentation...")
@@ -84,8 +85,6 @@ def run_feature_extraction():
         device=DEVICE_STR
     )
     print(f"Tissue contours saved to: {geojson_contours_path}")
-
-    contour_image_path = os.path.join(OUTPUT_DIR, 'contours', WSI_FNAME.replace('.svs', '.jpg'))
 
     # 4. Extract patch coordinates
     print("Extracting patch coordinates...")
