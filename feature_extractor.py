@@ -101,24 +101,23 @@ def extract_features_for_wsi(wsi_full_path, unique_output_identifier, output_bas
             weights_path=config.CONVNEXT_WEIGHTS_PATH,
             input_size=config.CONVNEXT_INPUT_SIZE,
             precision=config.CONVNEXT_PRECISION,
-            device_str=config.DEVICE_STR # Pass device_str
+            device_str=config.DEVICE_STR
         )
         if not patch_encoder.model:
             print("  ERROR: Patch encoder model not built. Aborting for this slide.")
-            # Clean up coordinates file? Optional.
-            # os.remove(coords_h5_path)
             return None
 
         # 5. Run Patch Feature Extraction
         print("  Running patch feature extraction...")
         # save_features expects a directory. Trident will create a subdir based on WSI name within it.
-        _ = slide.extract_patch_features(
+        features_h5_path = slide.extract_patch_features(
             patch_encoder=patch_encoder,
             coords_path=coords_h5_path,
             save_features=slide_output_dir, # Save into the slide-specific directory
             device=config.DEVICE_STR
         )
 
+        print(features_h5_path)
         # --- Find and Rename the HDF5 file ---
         wsi_basename = os.path.splitext(os.path.basename(wsi_full_path))[0]
         potential_trident_h5_path = os.path.join(slide_output_dir, wsi_basename, "features.h5")
@@ -161,7 +160,17 @@ def run_batch_feature_extraction():
     """
     os.makedirs(config.EXTRACTED_FEATURES_DIR, exist_ok=True)
     try:
-        df = pd.read_csv(config.CSV_PATH)
+        df = pd.read_csv(config.CSV_PATH, skipinitialspace=True, encoding='utf-8-sig')
+
+        # 3. Clean column names (remove leading/trailing spaces and make lowercase for robust checking)
+        original_columns = list(df.columns) # Keep original for potential error messages
+        df.columns = df.columns.str.strip().str.lower()
+        cleaned_columns = list(df.columns)
+
+        print(f"DEBUG: Original columns read: {original_columns}")
+        print(f"DEBUG: Cleaned columns (lowercase, stripped): {cleaned_columns}")
+        print(f"DEBUG: Checking for 'path' in cleaned columns: {'path' in df.columns}")
+        print(f"DEBUG: Checking for 'label' in cleaned columns: {'label' in df.columns}")
         # Basic validation of CSV format
         if 'path' not in df.columns or 'label' not in df.columns:
              raise ValueError("CSV file must contain 'path' and 'label' columns.")

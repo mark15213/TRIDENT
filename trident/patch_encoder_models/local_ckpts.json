@@ -20,5 +20,16 @@
     "lunit-vits8": "",
     "conch_v15": "",
     "musk": "",
-    "custom_encoder": ""
+    "custom_encoder": "",
+    "my_convnext_v2l": {
+        "model_hub": "timm",                   
+        "model_name": "convnextv2_large",      
+        "weights_path": "/mnt/rj200t/ckpt/checkpoint-2.pth", 
+        "input_size": 224,                     
+        "embedding_dim": 1536,                 
+        "url": null,                           
+        "repo_id": null,                      
+        "filename": "checkpoint-2.pth", 
+        "description": "Custom ConvNeXtV2 Large trained locally."
+    }
 }
