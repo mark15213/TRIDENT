@@ -1285,7 +1285,7 @@ class MyConvNeXtV2LargeSSLEncoder(BasePatchEncoder):
 
         model_architecture_name = 'convnextv2_large'
 
-        # Create the model
+        # Create the modelv
         model = timm.create_model(
             model_architecture_name,
             pretrained=False,
@@ -1293,7 +1293,7 @@ class MyConvNeXtV2LargeSSLEncoder(BasePatchEncoder):
         )
 
         # Load weights
-        state_dict = torch.load(self.weights_path, map_location='cpu')
+        state_dict = torch.load(self.weights_path, map_location='cpu', weights_only=False)
         if 'state_dict' in state_dict: state_dict = state_dict['state_dict']
         elif 'model_state_dict' in state_dict: state_dict = state_dict['model_state_dict']
         elif 'model' in state_dict: state_dict = state_dict['model']

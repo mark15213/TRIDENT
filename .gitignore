@@ -1,1 +1,3 @@
 **/__pycache__/
+deeplabv3_seg_v4.ckpt
+tutorial_convnext_extraction_output/

@@ -58,24 +58,24 @@ def run_feature_extraction():
             exit() # Exit if specific path given but not found
 
     # 1. Download WSI
-    print(f"Downloading WSI: {WSI_FNAME}...")
-    local_wsi_dir = snapshot_download(
-        repo_id="MahmoodLab/unit-testing",
-        repo_type='dataset',
-        local_dir=os.path.join(OUTPUT_DIR, 'wsis'),
-        allow_patterns=[WSI_FNAME]
-    )
-    wsi_path = os.path.join(local_dir, WSI_FNAME)
+    # print(f"Downloading WSI: {WSI_FNAME}...")
+    # local_wsi_dir = snapshot_download(
+    #     repo_id="MahmoodLab/unit-testing",
+    #     repo_type='dataset',
+    #     local_dir=os.path.join(OUTPUT_DIR, 'wsis'),
+    #     allow_patterns=[WSI_FNAME]
+    # )
+    wsi_path = "/mnt/warm/SenseCare-PathCloud/single/storage/rj/section_files/20240131/3f82a3fcbc0b9b8277f28c3aae28e149/6_1_165657.svs"
 
     # 2. Create OpenSlideWSI object
     print("Creating OpenSlideWSI object...")
-    # print(wsi_path)
+    print(wsi_path)
     slide = OpenSlideWSI(slide_path=wsi_path, lazy_init=False)
 
     # 3. Run tissue segmentation
     print("Running tissue segmentation...")
     # Assuming segmentation_model_factory correctly handles device or the model does.
-    segmentation_model_instance = segmentation_model_factory("hest", device=DEVICE_STR)
+    segmentation_model_instance = segmentation_model_factory("hest")
     # segmentation_model_instance.model.to(DEVICE) # If factory doesn't move it
 
     geojson_contours_path = slide.segment_tissue(
@@ -97,7 +97,7 @@ def run_feature_extraction():
 
     viz_coords_dir = os.path.join(OUTPUT_DIR, "visualization_coords")
     os.makedirs(viz_coords_dir, exist_ok=True)
-    viz_coords_image_path = slide.visualize_coords(
+    viz_cooclasrds_image_path = slide.visualize_coords(
         coords_path=coords_h5_path,
         save_patch_viz=viz_coords_dir
     )
@@ -149,12 +149,4 @@ def run_feature_extraction():
     print(f"All outputs saved in: {OUTPUT_DIR}")
 
 if __name__ == '__main__':
-    if CONVNEXT_WEIGHTS_PATH == 'path/to/your/custom_convnextv2_large_weights.pth' and \
-       not os.path.exists(CONVNEXT_WEIGHTS_PATH):
-        print("*"*80)
-        print("WARNING: The script is using a placeholder path for ConvNeXt V2 weights.")
-        print(f"         A DUMMY weights file will be created at '{CONVNEXT_WEIGHTS_PATH}' IF the path is the default placeholder.")
-        print("         For meaningful results, please update CONVNEXT_WEIGHTS_PATH with your actual weights.")
-        print("*"*80)
-
     run_feature_extraction()
