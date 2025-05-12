@@ -54,8 +54,9 @@ class WSIFeatureDataset(Dataset):
         wsi_path = row['path'] # Get the original WSI path
         label_str = row['label']
         label_int = self.label_map[label_str]
+        feature_h5_path = self.feature_file_map[wsi_path]
 
-        feature_h5_path = self.feature_file_map[wsi_path] # Look up HDF5 path using WSI path
+        feature_dim = 1536
 
         try:
             with h5py.File(feature_h5_path, 'r') as hf:
@@ -63,7 +64,6 @@ class WSIFeatureDataset(Dataset):
                     print(f"Warning: 'features' dataset not found in {feature_h5_path} for {wsi_path}. Returning zero tensor.")
                     # Need to know feature_dim for zero tensor
                     # This requires feature_dim to be passed or inferred robustly
-                    feature_dim = 1024 # Replace with actual or inferred dim
                     patch_features = np.zeros((0, feature_dim), dtype=np.float32) # Empty array with correct second dim
                 else:
                     patch_features = hf['features'][:] # Load features
