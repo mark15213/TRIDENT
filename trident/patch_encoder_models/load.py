@@ -79,9 +79,48 @@ This file contains an assortment of pretrained patch encoders, all loadable via 
 def encoder_factory(model_name: str, **kwargs) -> torch.nn.Module: # Added return type hint
     """
     Instantiate a patch encoder model by name.
-    ... (docstring unchanged) ...
+    This factory function returns a pre-configured encoder model class based on the provided
+    `model_name`. Each encoder is designed for extracting representations from image patches
+    using specific backbones or pretraining strategies.
+
+    Args:
+        model_name (str): Name of the encoder to instantiate. Must be one of the following:
+            - "conch_v1"
+            - "conch_v15"
+            - "uni_v1"
+            - "uni_v2"
+            - "ctranspath"
+            - "phikon"
+            - "phikon_v2"
+            - "resnet50"
+            - "gigapath"
+            - "virchow"
+            - "virchow2"
+            - "hoptimus0"
+            - "hoptimus1"
+            - "musk"
+            - "hibou_l"
+            - "kaiko-vitb8"
+            - "kaiko-vitb16"
+            - "kaiko-vits8"
+            - "kaiko-vits16"
+            - "kaiko-vitl14"
+            - "lunit-vits8"
+
+        **kwargs: Optional keyword arguments passed directly to the encoder constructor. These
+            may include parameters such as:
+            - weights_path (str): Path to a local checkpoint (optional)
+            - normalize (bool): Whether to normalize output embeddings (default: False)
+            - with_proj (bool): Whether to apply the projection head (default: True)
+            - any model-specific configuration parameters
+
+    Returns:
+        torch.nn.Module: An instance of the specified encoder model.
+
+    Raises:
+        ValueError: If `model_name` is not among the recognized encoder names.
     """
-    enc_class: Optional[type[BasePatchEncoder]] = None # Type hint for clarity
+    enc_class: Optional[type[BasePatchEncoder]] = None
 
     if model_name == 'conch_v1':
         enc_class = Conchv1InferenceEncoder
@@ -151,7 +190,18 @@ class BasePatchEncoder(torch.nn.Module):
     def __init__(self, weights_path: Optional[str] = None, **build_kwargs: Any): # Added Any for build_kwargs
         """
         Initialize BasePatchEncoder.
-        ... (docstring unchanged) ...
+        Args:
+            weights_path (Optional[str]): 
+                Optional path to local model weights. If None, the model is loaded from the model registry or downloaded from Hugging Face Hub.
+            **build_kwargs: 
+                Additional keyword arguments passed to the `_build()` method to customize model creation.
+
+        Attributes:
+            enc_name (Optional[str]): Name of the encoder architecture (set during `_build()`).
+            weights_path (Optional[str]): Path to local model weights (if provided).
+            model (nn.Module): The instantiated encoder model.
+            eval_transforms (Callable): Evaluation-time preprocessing transforms.
+            precision (torch.dtype): Precision used for inference.
         """
         super().__init__()
         self.enc_name: Optional[str] = None
