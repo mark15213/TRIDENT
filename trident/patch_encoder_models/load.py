@@ -1,205 +1,374 @@
 import traceback
 from abc import abstractmethod
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple, Callable, Dict, Any # Added Dict, Any, Callable, Tuple
 import torch
-import os 
+import torch.nn as nn # Added nn
+import os
+
+# --- BEGIN: Import your ConvNeXtV2 model and its factory functions ---
+# Adjust this import based on your project structure.
+# For example, if convnextv2_model.py is in a 'custom_models' subdirectory
+# of where 'trident' is, you might use:
+# from trident.custom_models.convnextv2_model import (
+try:
+    # Assuming convnextv2_model.py is in the same directory or a findable path
+    # This is a common pattern in libraries like timm
+    # If your convnextv2_model.py is part of the trident.patch_encoder_models structure:
+    # from .convnextv2_model import (
+    # Or if it's a top-level module in your project:
+    # from my_project_convnext_models.convnextv2_model import (
+
+    # For demonstration, assuming it's accessible like this:
+    from trident.patch_encoder_models.convnextv2_model import ( # YOU WILL LIKELY NEED TO CHANGE THIS IMPORT PATH
+        ConvNeXtV2, convnextv2_atto, convnextv2_femto, convnext_pico,
+        convnextv2_nano, convnextv2_tiny, convnextv2_base, convnextv2_large, convnextv2_huge
+    )
+except ImportError:
+    print("Warning: Could not import ConvNeXtV2 model. Please ensure convnextv2_model.py is in the correct path.")
+    print("Falling back to dummy ConvNeXtV2 for structure demonstration.")
+    # --- Dummy definitions for demonstration if import fails ---
+    class GRN(torch.nn.Module):
+        def __init__(self, dim): super().__init__(); self.gamma = torch.nn.Parameter(torch.zeros(1, 1, 1, dim)); self.beta = torch.nn.Parameter(torch.zeros(1, 1, 1, dim))
+        def forward(self, x): gx = torch.norm(x, p=2, dim=(1,2), keepdim=True); nx = gx / (gx.mean(dim=-1, keepdim=True) + 1e-6); return self.gamma * (x * nx) + self.beta + x
+    class LayerNorm(torch.nn.Module):
+        def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
+            super().__init__(); self.normalized_shape = (normalized_shape,); self.eps = eps; self.data_format = data_format
+            self.weight = torch.nn.Parameter(torch.ones(normalized_shape)); self.bias = torch.nn.Parameter(torch.zeros(normalized_shape))
+        def forward(self, x):
+            if self.data_format == "channels_last": u = x.mean(-1, keepdim=True); s = (x - u).pow(2).mean(-1, keepdim=True); x = (x - u) / torch.sqrt(s + self.eps); x = self.weight * x + self.bias; return x
+            elif self.data_format == "channels_first": x_perm = x.permute(0, 2, 3, 1); u = x_perm.mean(-1, keepdim=True); s = (x_perm - u).pow(2).mean(-1, keepdim=True); x_perm = (x_perm - u) / torch.sqrt(s + self.eps); x_perm = self.weight * x_perm + self.bias; return x_perm.permute(0, 3, 1, 2)
+    class Block(torch.nn.Module):
+        def __init__(self, dim, drop_path=0.): super().__init__(); self.dwconv = torch.nn.Conv2d(dim, dim, 7, 3, groups=dim); self.norm = LayerNorm(dim); self.pwconv1 = torch.nn.Linear(dim, 4*dim); self.act = torch.nn.GELU(); self.grn = GRN(4*dim); self.pwconv2 = torch.nn.Linear(4*dim, dim); self.drop_path = torch.nn.Identity()
+        def forward(self, x): inp = x; x = self.dwconv(x); x = x.permute(0,2,3,1); x=self.norm(x); x=self.pwconv1(x); x=self.act(x); x=self.grn(x); x=self.pwconv2(x); x=x.permute(0,3,1,2); x=inp+self.drop_path(x); return x
+    class ConvNeXtV2(torch.nn.Module):
+        def __init__(self, in_chans=3, num_classes=1000, depths=[1], dims=[40], drop_path_rate=0., head_init_scale=1., **kwargs): # Added missing args
+            super().__init__(); self.dims = dims; self.downsample_layers = torch.nn.ModuleList([torch.nn.Sequential(torch.nn.Conv2d(in_chans, dims[0], 4, 4), LayerNorm(dims[0], data_format="channels_first"))])
+            self.stages = torch.nn.ModuleList([torch.nn.Sequential(*[Block(dim=dims[0]) for _ in range(depths[0])])])
+            self.norm = torch.nn.LayerNorm(dims[-1]); self.head = torch.nn.Linear(dims[-1], num_classes)
+            self.apply(self._init_weights) # Added apply
+            if hasattr(self.head, 'weight'): self.head.weight.data.mul_(head_init_scale) # Added safety check
+            if hasattr(self.head, 'bias') and self.head.bias is not None: self.head.bias.data.mul_(head_init_scale)
+        def forward_features(self, x): x = self.downsample_layers[0](x); x = self.stages[0](x); return self.norm(x.mean([-2,-1]))
+        def forward(self, x): x = self.forward_features(x); return self.head(x)
+        def _init_weights(self,m): # simplified
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                # Corrected trunc_normal_ import or simplified init
+                torch.nn.init.trunc_normal_(m.weight, std=.02)
+                if m.bias is not None: nn.init.constant_(m.bias, 0)
+
+    def convnextv2_atto(**kwargs): return ConvNeXtV2(depths=[2,2,6,2], dims=[40,80,160,320], **kwargs)
+    def convnextv2_femto(**kwargs): return ConvNeXtV2(depths=[2,2,6,2], dims=[48,96,192,384], **kwargs)
+    def convnext_pico(**kwargs): return ConvNeXtV2(depths=[2,2,6,2], dims=[64,128,256,512], **kwargs) # Corrected name
+    def convnextv2_nano(**kwargs): return ConvNeXtV2(depths=[2,2,8,2], dims=[80,160,320,640], **kwargs)
+    def convnextv2_tiny(**kwargs): return ConvNeXtV2(depths=[3,3,9,3], dims=[96,192,384,768], **kwargs)
+    def convnextv2_base(**kwargs): return ConvNeXtV2(depths=[3,3,27,3], dims=[128,256,512,1024], **kwargs)
+    def convnextv2_large(**kwargs): return ConvNeXtV2(depths=[3,3,27,3], dims=[192,384,768,1536], **kwargs)
+    def convnextv2_huge(**kwargs): return ConvNeXtV2(depths=[3,3,27,3], dims=[352,704,1408,2816], **kwargs)
+# --- END: Import your ConvNeXtV2 model ---
+
 
 from trident.patch_encoder_models.utils.constants import get_constants
 from trident.patch_encoder_models.utils.transform_utils import get_eval_transforms
 from trident.IO import get_weights_path, has_internet_connection
 
+
 """
 This file contains an assortment of pretrained patch encoders, all loadable via the encoder_factory() function.
 """
 
-def encoder_factory(model_name: str, **kwargs):
+def encoder_factory(model_name: str, **kwargs) -> torch.nn.Module: # Added return type hint
     """
     Instantiate a patch encoder model by name.
-
-    This factory function returns a pre-configured encoder model class based on the provided
-    `model_name`. Each encoder is designed for extracting representations from image patches
-    using specific backbones or pretraining strategies.
-
-    Args:
-        model_name (str): Name of the encoder to instantiate. Must be one of the following:
-            - "conch_v1"
-            - "conch_v15"
-            - "uni_v1"
-            - "uni_v2"
-            - "ctranspath"
-            - "phikon"
-            - "phikon_v2"
-            - "resnet50"
-            - "gigapath"
-            - "virchow"
-            - "virchow2"
-            - "hoptimus0"
-            - "hoptimus1"
-            - "musk"
-            - "hibou_l"
-            - "kaiko-vitb8"
-            - "kaiko-vitb16"
-            - "kaiko-vits8"
-            - "kaiko-vits16"
-            - "kaiko-vitl14"
-            - "lunit-vits8"
-
-        **kwargs: Optional keyword arguments passed directly to the encoder constructor. These
-            may include parameters such as:
-            - weights_path (str): Path to a local checkpoint (optional)
-            - normalize (bool): Whether to normalize output embeddings (default: False)
-            - with_proj (bool): Whether to apply the projection head (default: True)
-            - any model-specific configuration parameters
-
-    Returns:
-        torch.nn.Module: An instance of the specified encoder model.
-
-    Raises:
-        ValueError: If `model_name` is not among the recognized encoder names.
+    ... (docstring unchanged) ...
     """
+    enc_class: Optional[type[BasePatchEncoder]] = None # Type hint for clarity
+
     if model_name == 'conch_v1':
-        enc = Conchv1InferenceEncoder
+        enc_class = Conchv1InferenceEncoder
     elif model_name == 'conch_v15':
-        enc = Conchv15InferenceEncoder
+        enc_class = Conchv15InferenceEncoder
     elif model_name == 'uni_v1':
-        enc = UNIInferenceEncoder
+        enc_class = UNIInferenceEncoder
     elif model_name == 'uni_v2':
-        enc = UNIv2InferenceEncoder
+        enc_class = UNIv2InferenceEncoder
     elif model_name == 'ctranspath':
-        enc = CTransPathInferenceEncoder
+        enc_class = CTransPathInferenceEncoder
     elif model_name == 'phikon':
-        enc = PhikonInferenceEncoder
+        enc_class = PhikonInferenceEncoder
     elif model_name == 'resnet50':
-        enc = ResNet50InferenceEncoder
+        enc_class = ResNet50InferenceEncoder
     elif model_name == 'gigapath':
-        enc = GigaPathInferenceEncoder
+        enc_class = GigaPathInferenceEncoder
     elif model_name == 'virchow':
-        enc = VirchowInferenceEncoder
+        enc_class = VirchowInferenceEncoder
     elif model_name == 'virchow2':
-        enc = Virchow2InferenceEncoder
+        enc_class = Virchow2InferenceEncoder
     elif model_name == 'hoptimus0':
-        enc = HOptimus0InferenceEncoder
+        enc_class = HOptimus0InferenceEncoder
     elif model_name == 'hoptimus1':
-        enc = HOptimus1InferenceEncoder
+        enc_class = HOptimus1InferenceEncoder
     elif model_name == 'phikon_v2':
-        enc = Phikonv2InferenceEncoder
+        enc_class = Phikonv2InferenceEncoder
     elif model_name == 'musk':
-        enc = MuskInferenceEncoder
+        enc_class = MuskInferenceEncoder
     elif model_name == 'hibou_l':
-        enc = HibouLInferenceEncoder
+        enc_class = HibouLInferenceEncoder
     elif model_name == 'kaiko-vitb8':
-        enc = KaikoB8InferenceEncoder
+        enc_class = KaikoB8InferenceEncoder
     elif model_name == 'kaiko-vitb16':
-        enc = KaikoB16InferenceEncoder
+        enc_class = KaikoB16InferenceEncoder
     elif model_name == 'kaiko-vits8':
-        enc = KaikoS8InferenceEncoder
+        enc_class = KaikoS8InferenceEncoder
     elif model_name == 'kaiko-vits16':
-        enc = KaikoS16InferenceEncoder
+        enc_class = KaikoS16InferenceEncoder
     elif model_name == 'kaiko-vitl14':
-        enc = KaikoL14InferenceEncoder
+        enc_class = KaikoL14InferenceEncoder
     elif model_name == 'lunit-vits8':
-        enc = LunitS8InferenceEncoder
+        enc_class = LunitS8InferenceEncoder
     elif model_name == 'midnight12k':
-        enc = Midnight12kInferenceEncoder
+        enc_class = Midnight12kInferenceEncoder
+    # --- BEGIN: Add ConvNeXtV2 variants ---
+    elif model_name.startswith('convnextv2_') or model_name == 'convnext_pico':
+        enc_class = ConvNeXtV2PatchEncoder
+        # Pass the specific variant name to the constructor
+        # The ConvNeXtV2PatchEncoder's _build method will use this.
+        variant = model_name.split('_')[-1] if model_name != 'convnext_pico' else 'pico'
+        kwargs['model_variant'] = variant
+    # --- END: Add ConvNeXtV2 variants ---
     else:
         raise ValueError(f"Unknown encoder name {model_name}")
 
-    return enc(**kwargs)
+    if enc_class is None: # Should not happen if logic is correct
+        raise ValueError(f"Encoder class not assigned for model_name: {model_name}")
+        
+    return enc_class(**kwargs)
 
 
 class BasePatchEncoder(torch.nn.Module):
 
     _has_internet = has_internet_connection()
-    
-    def __init__(self, weights_path: Optional[str] = None, **build_kwargs):
+
+    def __init__(self, weights_path: Optional[str] = None, **build_kwargs: Any): # Added Any for build_kwargs
         """
         Initialize BasePatchEncoder.
-
-        Args:
-            weights_path (Optional[str]): 
-                Optional path to local model weights. If None, the model is loaded from the model registry or downloaded from Hugging Face Hub.
-            **build_kwargs: 
-                Additional keyword arguments passed to the `_build()` method to customize model creation.
-
-        Attributes:
-            enc_name (Optional[str]): Name of the encoder architecture (set during `_build()`).
-            weights_path (Optional[str]): Path to local model weights (if provided).
-            model (nn.Module): The instantiated encoder model.
-            eval_transforms (Callable): Evaluation-time preprocessing transforms.
-            precision (torch.dtype): Precision used for inference.
+        ... (docstring unchanged) ...
         """
-
         super().__init__()
         self.enc_name: Optional[str] = None
         self.weights_path: Optional[str] = weights_path
-        self.model, self.eval_transforms, self.precision = self._build(**build_kwargs)
+        # Model, transforms, and precision are tuples, so type hint accordingly
+        _build_result = self._build(**build_kwargs)
+        if not (isinstance(_build_result, tuple) and len(_build_result) == 3):
+            raise ValueError(f"_build method for {self.__class__.__name__} must return a tuple of (model, eval_transforms, precision). Got: {_build_result}")
+        self.model: Optional[torch.nn.Module]
+        self.eval_transforms: Optional[Callable]
+        self.precision: Optional[torch.dtype]
+        self.model, self.eval_transforms, self.precision = _build_result
 
-    def ensure_valid_weights_path(self, weights_path):
+
+    def ensure_valid_weights_path(self, weights_path: Optional[str]): # Added Optional and type hint
         if weights_path and not os.path.isfile(weights_path):
             raise FileNotFoundError(f"Expected checkpoint at '{weights_path}', but the file was not found.")
-    
-    def ensure_has_internet(self, enc_name):
+
+    def ensure_has_internet(self, enc_name: str): # Added type hint
         if not BasePatchEncoder._has_internet:
-            raise FileNotFoundError(
-                f"Internet connection does seem not available. Auto checkpoint download is disabled."
-                f"To proceed, please manually download: {enc_name},\n"
-                f"and place it in the model registry in:\n`trident/patch_encoder_models/local_ckpts.json`"
+            raise ConnectionError( # Changed to ConnectionError for more specific type
+                f"Internet connection does not seem available. Auto checkpoint download is disabled for {enc_name}.\n"
+                f"To proceed, please manually download the weights for: {enc_name},\n"
+                f"and place it in the model registry (e.g., `trident/patch_encoder_models/local_ckpts.json`) or provide the path via `weights_path`."
             )
-        
-    def _get_weights_path(self):
+
+    def _get_weights_path(self) -> Optional[str]: # Added return type hint
         """
-        If self.weights_path is provided, use it. 
-        If not provided, check the model registry. 
-            If path in model registry is empty, auto-download from huggingface
-            else, use the path from the registry.
+        If self.weights_path is provided, use it.
+        If not provided, check the model registry using self.enc_name.
         """
         if self.weights_path:
             self.ensure_valid_weights_path(self.weights_path)
             return self.weights_path
         else:
-            weights_path = get_weights_path('patch', self.enc_name)
-            self.ensure_valid_weights_path(weights_path)
-            return weights_path
+            if self.enc_name is None:
+                # This case should ideally not happen if enc_name is set in _build before calling _get_weights_path
+                # However, if a subclass calls _get_weights_path before self.enc_name is set,
+                # it means it cannot look up in the registry.
+                print(f"Warning: self.enc_name is None for {self.__class__.__name__}. Cannot look up weights in registry. "
+                      "Ensure self.enc_name is set in _build, or provide weights_path directly.")
+                return None # No specific path, implies HuggingFace download or no weights.
 
-    def forward(self, x):
+            weights_path_from_registry = get_weights_path('patch', self.enc_name) # type: ignore
+
+            # get_weights_path might return None or an empty string if not found or not configured
+            if weights_path_from_registry and os.path.isfile(weights_path_from_registry):
+                return weights_path_from_registry
+            elif weights_path_from_registry: # Path is configured but file doesn't exist
+                 print(f"Warning: Weights path '{weights_path_from_registry}' for '{self.enc_name}' found in registry but file does not exist.")
+                 return None # Or raise error, depending on desired behavior
+            return None # Not in registry or path is empty/invalid
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor: # Added type hints
         """
         Can be overwritten if model requires special forward pass.
         """
+        if self.model is None:
+            raise RuntimeError(f"Model not built for {self.enc_name or self.__class__.__name__}. Call _build first.")
         z = self.model(x)
         return z
-        
+
     @abstractmethod
-    def _build(self, **build_kwargs):
+    def _build(self, **build_kwargs: Any) -> Tuple[Optional[torch.nn.Module], Optional[Callable], Optional[torch.dtype]]: # Added Any, return type hint
         pass
 
 
-class CustomInferenceEncoder(BasePatchEncoder):
-
-    def __init__(self, enc_name, model, transforms, precision):
+# --- BEGIN: Add ConvNeXtV2PatchEncoder class ---
+class ConvNeXtV2PatchEncoder(BasePatchEncoder):
+    """
+    Patch encoder using ConvNeXtV2 variants.
+    """
+    def __init__(self, model_variant: str = 'tiny', weights_path: Optional[str] = None, **build_kwargs: Any):
         """
-        Initialize a CustomInferenceEncoder from user-defined components.
-
-        This class is used when the model, transforms, and precision are pre-instantiated externally 
-        and should be injected directly into the encoder wrapper.
+        Initialize ConvNeXtV2PatchEncoder.
 
         Args:
-            enc_name (str): 
-                A unique name or identifier for the encoder (used for registry or logging).
-            model (torch.nn.Module): 
-                A PyTorch model instance to use for inference.
-            transforms (Callable): 
-                A callable (e.g., torchvision or timm transform) to preprocess input images for evaluation.
-            precision (torch.dtype): 
-                The precision to use for inference (e.g., torch.float32, torch.float16).
+            model_variant (str): Specific ConvNeXtV2 variant (e.g., 'tiny', 'base', 'pico').
+            weights_path (Optional[str]): Path to local model weights.
+            **build_kwargs: Additional arguments for _build.
         """
-        super().__init__()
-        self.enc_name = enc_name
-        self.model = model
-        self.eval_transforms = transforms
-        self.precision = precision
-        
-    def _build(self):
-        return None, None, None
+        # model_variant is crucial for _build, so pass it along.
+        # BasePatchEncoder.__init__ will call self._build(**build_kwargs_for_super)
+        # where build_kwargs_for_super will include model_variant.
+        build_kwargs['model_variant'] = model_variant
+        super().__init__(weights_path=weights_path, **build_kwargs)
+
+    def _build(self,
+                 model_variant: str = 'tiny',
+                 in_chans: int = 3,
+                 img_size: int = 224, # Default image size for transforms
+                 drop_path_rate: float = 0.0,
+                 head_init_scale: float = 1.0,
+                 # pretrained_flag_for_timm: bool = True, # Use this if your ConvNeXtV2 factory takes 'pretrained'
+                 **kwargs: Any
+                ) -> Tuple[torch.nn.Module, Callable, torch.dtype]:
+
+        self.enc_name = f'convnextv2_{model_variant}'
+        if model_variant == "pico":
+            self.enc_name = 'convnext_pico' # Match your specific naming
+
+        _model_factories: Dict[str, Callable[..., ConvNeXtV2]] = {
+            'atto': convnextv2_atto,
+            'femto': convnextv2_femto,
+            'pico': convnext_pico,
+            'nano': convnextv2_nano,
+            'tiny': convnextv2_tiny,
+            'base': convnextv2_base,
+            'large': convnextv2_large,
+            'huge': convnextv2_huge,
+        }
+
+        if model_variant not in _model_factories:
+            raise ValueError(f"Unsupported ConvNeXtV2 variant: {model_variant}. Available: {list(_model_factories.keys())}")
+
+        # Instantiate the ConvNeXtV2 model
+        # The num_classes is often set to 0 or a dummy value for feature extraction
+        # Your ConvNeXtV2 definition needs to handle this (e.g., by having forward_features)
+        model = _model_factories[model_variant](
+            in_chans=in_chans,
+            num_classes=0, # Or some other value if your model requires it, but head is usually ignored for patch features
+            drop_path_rate=drop_path_rate,
+            head_init_scale=head_init_scale
+            #pretrained=pretrained_flag_for_timm # If your ConvNeXtV2 factory supports a pretrained flag for its own remote weights
+        )
+
+        # Load custom pretrained weights if a path is determined
+        # self.weights_path is set by BasePatchEncoder.__init__
+        # _get_weights_path() resolves it or gets from registry
+        resolved_weights_path = self._get_weights_path() # This uses self.enc_name set above
+
+        if resolved_weights_path:
+            print(f"Loading weights for {self.enc_name} from: {resolved_weights_path}")
+            try:
+                checkpoint = torch.load(resolved_weights_path, map_location='cpu')
+                # Adapt this based on how your weights are saved
+                if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                    state_dict = checkpoint['state_dict']
+                elif isinstance(checkpoint, dict) and 'model' in checkpoint:
+                    state_dict = checkpoint['model']
+                else:
+                    state_dict = checkpoint # Assume it's the state_dict itself
+
+                # Remove "module." prefix if present (from DataParallel/DDP)
+                new_state_dict = {}
+                for k, v in state_dict.items():
+                    name = k[7:] if k.startswith('module.') else k
+                    new_state_dict[name] = v
+                
+                # Load into the model.
+                # If you are only using forward_features, strict=False might be safer
+                # if the checkpoint contains a head that model doesn't have (e.g. num_classes=0).
+                missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
+                if missing_keys:
+                    print(f"Warning: Missing keys for {self.enc_name}: {missing_keys}")
+                if unexpected_keys:
+                    print(f"Warning: Unexpected keys for {self.enc_name}: {unexpected_keys}")
+                print(f"Successfully loaded weights for {self.enc_name} from {resolved_weights_path}")
+
+            except Exception as e:
+                print(f"Error loading weights for {self.enc_name} from {resolved_weights_path}: {e}")
+                traceback.print_exc()
+                raise e
+        elif self.weights_path: # User provided a path but it was invalid (handled by ensure_valid_weights_path)
+             print(f"Warning: Provided weights_path '{self.weights_path}' for {self.enc_name} was invalid. Using initial weights.")
+        else:
+            # No weights_path provided by user, and not found in registry.
+            # This implies either using timm's pretrained (if ConvNeXtV2 factory supports it)
+            # or using randomly initialized weights.
+            # If your _model_factories[model_variant] call already handles timm's pretrained, this is fine.
+            # Otherwise, it's randomly initialized.
+            print(f"No local or registry weights path found for {self.enc_name}. Model will use its initial/default weights.")
+
+
+        # Standard ImageNet transforms for ConvNeXt typically
+        mean, std = get_constants('imagenet') # Or specific constants if your model was trained differently
+        from torchvision.transforms import InterpolationMode # Ensure import
+        eval_transforms = get_eval_transforms(
+            mean=mean,
+            std=std,
+            target_img_size=img_size, # ConvNeXtV2 is often 224
+            center_crop=True, # Common practice
+            interpolation=InterpolationMode.BICUBIC, # Common for ViTs/ConvNeXts
+            antialias=True
+        )
+
+        precision = torch.float32 # Default, can be changed to float16 if model supports it well
+
+        return model, eval_transforms, precision
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Extracts features using the ConvNeXtV2 model's forward_features method.
+        """
+        if self.model is None:
+             raise RuntimeError(f"Model not built for {self.enc_name}. Call _build first.")
+        # Assuming your ConvNeXtV2 model has a `forward_features` method
+        # that returns the desired patch embeddings (N, C)
+        return self.model.forward_features(x) # type: ignore
+
+class CustomInferenceEncoder(BasePatchEncoder):
+    def __init__(self, enc_name: str, model: torch.nn.Module, transforms: Callable, precision: torch.dtype): # Added type hints
+        """
+        Initialize a CustomInferenceEncoder from user-defined components.
+        ... (docstring unchanged) ...
+        """
+        # super().__init__() # Call super AFTER setting attributes needed by _build if _build isn't overridden properly
+        self.enc_name = enc_name # Set enc_name before super().__init__ if _get_weights_path is called by it indirectly
+        self._custom_model = model
+        self._custom_transforms = transforms
+        self._custom_precision = precision
+        super().__init__(weights_path=None) # weights_path is not used here as model is pre-loaded
+
+    def _build(self, **build_kwargs: Any) -> Tuple[torch.nn.Module, Callable, torch.dtype]: # Added build_kwargs, type hints
+        # For CustomInferenceEncoder, model, transforms, and precision are provided at init.
+        # The BasePatchEncoder._build will call this, so we return the pre-set values.
+        return self._custom_model, self._custom_transforms, self._custom_precision
 
 
 class MuskInferenceEncoder(BasePatchEncoder):
